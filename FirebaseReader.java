@@ -16,19 +16,24 @@ public class FirebaseReader implements Runnable
 		initiateConnection(url);
 		reader();
 	}
-	private boolean connected = true;
+	private boolean connected = false;
 	private URL url;
-
+				public FirebaseReader(String ur,ValueEventListener list){
+								url = getURL(ur+".json");
+								
+								setValueEvent(list);
+						}
 	
 	public FirebaseReader(String ur){
 	connected = true;
 	url = getURL(ur+".json");
 	t = new Thread(this);
-	//NetworkInfo info = new NetworkInfo();
 	}
 	
 	public void connect(){
+	t = new Thread(this);
 	t.start();
+	connected = true;
 	}
 	
 	private URL getURL(String val){
@@ -44,7 +49,6 @@ public class FirebaseReader implements Runnable
 	even = lia;
 	}
 	private Thread t;
-	private ExecutorService pool;
 	private void onReceive(String str){
 	try{
 	JSONObject js =new JSONObject(str);
@@ -65,6 +69,7 @@ public class FirebaseReader implements Runnable
 	connection.setRequestProperty("Accept", "text/event-stream");
 	inputStream = connection.getInputStream();
 	}catch(Exception e){
+			e.printStackTrace();
 	connected = false;
 	}
 	
@@ -91,13 +96,21 @@ public class FirebaseReader implements Runnable
 			} }
 		}catch(Exception e){
 		connected = false;
-		//System.out.println(e.toString());
+	
 		}
 	}
 	
 	public void disconnect(){
-	t.interrupt();
-	pool.shutdown();
+		connected = false;
+	try{
 	connection.disconnect();
+	 }catch(Exception e){
+	  e.printStackTrace();
+	 }
 	}
+	
+	public boolean isConnected(){
+	return connected;
+	}
+	
 }

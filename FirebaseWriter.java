@@ -8,39 +8,23 @@ import javax.net.ssl.*;
 import java.io.*;
 import javax.net.*;
 import org.json.*;
+import java.nio.charset.*;
 
 public class FirebaseWriter {
 
-	private long done=0;
+	private static final Charset UTF8 = Charset.forName("UTF-8");
 	private final String url;
-    private SSLSocket socket;
-    private BufferedReader reader;
-    private boolean isConnected;
-	private InputStream reax;
-	private OutputStream write;
+  private boolean isConnected;
 	private URI ui;
 	private String host;
-	private SSLSession sslSession;
-	private boolean reconnect=false;
-	private BufferedReader input;
-	private PipedInputStream pip;
-	private PipedOutputStream out;
-	public boolean rec;
+	private final ArrayDeque<WriterUnit> units = new ArrayDeque<WriterUnit>();
+	private final ArrayDeque<String> pending =new ArrayDeque<String>();
+	private WriterUnit current;
+	private Thread generator;
 	public FirebaseWriter(String rl){
 	url = rl+".json";
-	out = new PipedOutputStream();
-		try
-		{
-			pip = new PipedInputStream(out);
-		}
-		catch (IOException e)
-		{}
-		input = new BufferedReader(new InputStreamReader(pip));
 		
 	}
-	
-	
-	
 	
 	public void setValue(Object obj){
 			String to="";
@@ -95,19 +79,22 @@ public class FirebaseWriter {
 	}
 	
 	private void write(String val){
-		try
-		{
-		write.write(val.getBytes());
-		}catch (Exception e){
-		if(e instanceof SSLProtocolException|| e instanceof SSLException || e instanceof SocketException){
-		disconnect();
-		connect();
-		write(val);
-		}else{
-		//e.printStackTrace();
+		try{
+		if(current.i > 99){
+	  if(units.size() > 0){
+		current.sok.close();
+		current = units.poll();
 		}
+		}
+		current.out.write(val.getBytes(UTF8));
+		current.i++;
+		}catch (Exception e){
+		pending.add(val);
+		disconnect();
 		}
 	}
+	
+	
 	
 	public void deleteChild(String key){
 	String val ="DELETE "+ui.getPath()+"/"+key+" HTTP/1.1\r\n"+
@@ -117,43 +104,6 @@ public class FirebaseWriter {
 	"User-Agent: curl/7.54.0\r\n"+
 	"Conntection: keep-alive\r\n";
 	write(val);
-	}
-	
-	
-	private boolean push=false;
-	
-	
-	public String post(Object obj){
-		push=true;
-		String to="";
-		if(obj.getClass()==String.class){
-			to = "\""+obj.toString()+"\"";
-		}else{
-			to = obj.toString();
-		}
-		String val ="POST "+ui.getPath()+"?print=pretty HTTP/1.1\r\n"+
-			"Host: "+ui.getHost()+"\r\n"+
-			"Accept: */*\r\n"+
-			"Content-Type: application/json\r\n"+
-			"User-Agent: curl/7.54.0\r\n"+
-			"Conntection: keep-alive\r\n"+
-			"Content-length: "+to.getBytes().length+"\r\n\n"+to;
-		try
-		{
-			write(val);
-			while(pip.available() < 1){
-			}
-			byte[] read = new byte[pip.available()];
-			pip.read(read);
-			
-			String str= new String(read).trim();
-			JSONObject js = new JSONObject(str);
-			return js.getString("name");
-		}
-		catch (Exception e){
-			
-		}
-		return "";
 	}
 	
 	public String quickPost(Object obj){
@@ -166,90 +116,74 @@ public class FirebaseWriter {
 	}
 	return null;
 	}
-	
-	
-	private static synchronized long getId(){
-	return i++;
+	public boolean isConnected(){
+	return isConnected;
 	}
-	private static long i=0;
+	
 	public void disconnect(){
-
-		try{
-			socket.close();
-			if(messageListenerThread != null){
-				messageListenerThread.interrupt();
+			if(!isConnected){
+				return;
 			}
-		}
-		catch (IOException e)
-		{
-			e.printStackTrace();
-		}
+					isConnected = false;
+					units.clear();
 	}
+	private final Runnable task  =new Runnable(){
+								public void run(){
+								try{
+								while(true){
+							  if(units.size()< 2){
+								synchronized(units){
+								units.add(new WriterUnit(url));
+								}}
+								}}catch(Exception e){
+								synchronized(units){
+								units.clear();
+								}
+							  }
+							}};
+							
 	public void connect() {
-        try {
+      try {
 			ui = new URL(url).toURI();
 			host = ui.getHost();
-            int port = 80;
-			port = ui.getPort();
-			if(port == -1){
-			port = 443;
+			current = new WriterUnit(url);
+	    generator = new Thread(task);
+			generator.start();
+      isConnected = true;
+			while(pending.size() > 0){
+			write(pending.poll());
 			}
-			SocketFactory factory =
-			android.net.SSLCertificateSocketFactory.getDefault(60000);
-			SSLSocket sslSocket = (SSLSocket) factory.createSocket(host, port);
-			HostnameVerifier hv = HttpsURLConnection.getDefaultHostnameVerifier();
-			sslSession = sslSocket.getSession();
-			hv.verify(host,sslSession);
-			socket = sslSocket;
-		    reax = socket.getInputStream();
-			write = socket.getOutputStream();
-            reader = new BufferedReader(new InputStreamReader(reax));
-		 if(rec){
-			performWebSocketHandshake();
-			}
-			startListeningForMessages();
-            isConnected = true;
-			reconnect = false;
-        } catch (Exception e) {
-            //System.out.println(e.toString());
-        }
+      }catch (Exception e) {
+      System.out.println(e.toString());
+      }
 		
     }
-	private Thread messageListenerThread;
-	private void startListeningForMessages() {
-        messageListenerThread = new Thread(){ public void run(){
-		while (isConnected) {
-		try {
-		String message = reader.readLine().trim();
-		//System.out.println(message);
-		if(message.isEmpty()){
-		}
-			if(message.startsWith("{")){
-			String res = reader.readLine().trim();
-			//System.out.println(res);
-			out.write(("{"+res+"}").getBytes());
-			}
-		if(message.trim().equals("Connection: close")){
-		reconnect = true;
-		break;
-		}
-		} catch (Exception e) {
-		}
-				}
-			}};
-        messageListenerThread.start();
-    }
 	
-	public void performWebSocketHandshake()throws Exception{
-		String val ="GET "+ui.getPath()+"?print=pretty HTTP/1.1\r\n"+
-			"Host: "+ui.getHost()+"\r\n"+
-			"User-Agent: curl/7.54.0\r\n"+
-			"Content-Type: application/json\r\n"+
-			"Accept: text/event-stream\r\n";//+
-			//"Conntection: keep-alive\r\n";
-		write.write(val.getBytes());
-		write.flush();
-	}
+			private class WriterUnit{
+
+							int i;
+							OutputStream out;
+							Socket sok;
+						  WriterUnit(String url)throws Exception{
+																URI ur = new URL(url).toURI();
+																sok = c(ur);
+																out = sok.getOutputStream();
+													
+
+
+										}
+
+							Socket c(URI url)throws Exception{
+												SocketFactory factory = 
+														android.net.SSLCertificateSocketFactory.getDefault( 
+														6000, null); 
+												SSLSocket sslSocket = (SSLSocket) factory.createSocket(url.getHost(), 443); 
+												HostnameVerifier hv = HttpsURLConnection.getDefaultHostnameVerifier(); 
+												SSLSession sslSession = sslSocket.getSession(); 
+												hv.verify(url.getHost(), sslSession);
+												return sslSocket;
+										}
+						}
 	
 	
 }
